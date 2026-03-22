@@ -21,8 +21,147 @@ wifi:
 
 captive_portal:
 
+esp32_ble:
+  enable_on_boot: true
+  disable_bt_logs: true
+
 esp32_improv:
   authorizer: none
+
+# BLE GATT server for direct Bluetooth lamp control
+# Service UUID: bslamp2 custom service
+# Characteristics:
+#   - RGB: write 3 bytes [R, G, B] (0-255 each)
+#   - Brightness: write 1 byte (0-255)
+#   - Effect: write string effect name
+#   - State: read/notify current state as JSON
+esp32_ble_server:
+  manufacturer_data: [0x42, 0x4C]  # "BL" for Bedside Lamp
+  on_connect:
+    - logger.log: "BLE client connected"
+  on_disconnect:
+    - logger.log: "BLE client disconnected"
+  services:
+    - uuid: "0000beef-0000-1000-8000-00805f9b34fb"
+      advertise: true
+      characteristics:
+        # Write [R, G, B] to set color
+        - id: ble_rgb
+          uuid: "0000beef-0001-1000-8000-00805f9b34fb"
+          description: "RGB Color"
+          write: true
+          read: true
+          value:
+            data: [255, 255, 255]
+          on_write:
+            then:
+              - lambda: |-
+                  if (x.size() >= 3) {
+                    float r = x[0] / 255.0f;
+                    float g = x[1] / 255.0f;
+                    float b = x[2] / 255.0f;
+                    auto call = id(my_light).turn_on();
+                    call.set_rgb(r, g, b);
+                    call.set_transition_length(500);
+                    call.perform();
+                    ESP_LOGI("BLE", "RGB set to %d,%d,%d", x[0], x[1], x[2]);
+                  }
+
+        # Write 1 byte (0-255) to set brightness
+        - id: ble_brightness
+          uuid: "0000beef-0002-1000-8000-00805f9b34fb"
+          description: "Brightness"
+          write: true
+          read: true
+          value:
+            data: [255]
+          on_write:
+            then:
+              - lambda: |-
+                  if (x.size() >= 1) {
+                    float bri = x[0] / 255.0f;
+                    auto call = id(my_light).turn_on();
+                    call.set_brightness(bri);
+                    call.set_transition_length(500);
+                    call.perform();
+                    ESP_LOGI("BLE", "Brightness set to %d", x[0]);
+                  }
+
+        # Write effect name as string
+        - id: ble_effect
+          uuid: "0000beef-0003-1000-8000-00805f9b34fb"
+          description: "Effect"
+          write: true
+          read: true
+          value:
+            data: "None"
+            type: string
+          on_write:
+            then:
+              - lambda: |-
+                  std::string effect(x.begin(), x.end());
+                  if (effect == "off" || effect == "Off" || effect == "OFF") {
+                    auto call = id(my_light).turn_off();
+                    call.set_transition_length(500);
+                    call.perform();
+                  } else if (effect == "none" || effect == "None") {
+                    auto call = id(my_light).turn_on();
+                    call.set_effect("None");
+                    call.perform();
+                  } else {
+                    auto call = id(my_light).turn_on();
+                    call.set_effect(effect);
+                    call.perform();
+                  }
+                  ESP_LOGI("BLE", "Effect set to: %s", effect.c_str());
+
+        # Write on/off: 0x00 = off, 0x01 = on
+        - id: ble_power
+          uuid: "0000beef-0004-1000-8000-00805f9b34fb"
+          description: "Power"
+          write: true
+          read: true
+          notify: true
+          value:
+            data: [1]
+          on_write:
+            then:
+              - lambda: |-
+                  if (x.size() >= 1) {
+                    if (x[0] == 0) {
+                      auto call = id(my_light).turn_off();
+                      call.set_transition_length(500);
+                      call.perform();
+                      ESP_LOGI("BLE", "Power OFF");
+                    } else {
+                      auto call = id(my_light).turn_on();
+                      call.set_transition_length(500);
+                      call.perform();
+                      ESP_LOGI("BLE", "Power ON");
+                    }
+                  }
+
+        # Write color temp as 2 bytes (uint16 LE, mireds 153-588)
+        - id: ble_color_temp
+          uuid: "0000beef-0005-1000-8000-00805f9b34fb"
+          description: "Color Temperature"
+          write: true
+          read: true
+          value:
+            data: [0x72, 0x01]
+          on_write:
+            then:
+              - lambda: |-
+                  if (x.size() >= 2) {
+                    uint16_t mireds = x[0] | (x[1] << 8);
+                    if (mireds < 153) mireds = 153;
+                    if (mireds > 588) mireds = 588;
+                    auto call = id(my_light).turn_on();
+                    call.set_color_temperature(mireds);
+                    call.set_transition_length(500);
+                    call.perform();
+                    ESP_LOGI("BLE", "Color temp set to %d mireds", mireds);
+                  }
 
 web_server:
   port: 80

@@ -270,7 +270,7 @@ async def turn_on(
         )
         kwargs["color_mode"] = LightColorCapability.RGB
 
-    await lamp.client.light_command(**kwargs)
+    lamp.client.light_command(**kwargs)
 
     parts = ["Lamp turned ON."]
     if brightness is not None:
@@ -295,7 +295,7 @@ async def turn_off(transition: float = 1.0) -> str:
     if lamp.light_key is None:
         return "No light entity found on device."
 
-    await lamp.client.light_command(
+    lamp.client.light_command(
         key=lamp.light_key,
         state=False,
         transition_length=transition,
@@ -353,7 +353,7 @@ async def set_brightness(brightness: float, transition: float = 1.0) -> str:
     if lamp.light_key is None:
         return "No light entity found on device."
 
-    await lamp.client.light_command(
+    lamp.client.light_command(
         key=lamp.light_key,
         state=True,
         brightness=max(0, min(100, brightness)) / 100.0,
@@ -843,6 +843,214 @@ async def list_effects() -> str:
     lines = [f"Current effect: {current}", "", "Available effects:"]
     lines.extend(f"  {e}" for e in effects)
     return "\n".join(lines)
+
+
+# --- Bluetooth Control ---
+
+LAMP_BLE_NAME = "bedside-lamp"
+BLE_RGB_UUID = "0000beef-0001-1000-8000-00805f9b34fb"
+BLE_BRI_UUID = "0000beef-0002-1000-8000-00805f9b34fb"
+BLE_EFX_UUID = "0000beef-0003-1000-8000-00805f9b34fb"
+BLE_PWR_UUID = "0000beef-0004-1000-8000-00805f9b34fb"
+BLE_CT_UUID = "0000beef-0005-1000-8000-00805f9b34fb"
+
+
+async def _ble_connect():
+    """Find and connect to lamp over BLE, return BleakClient."""
+    try:
+        from bleak import BleakClient, BleakScanner
+    except ImportError:
+        return None, "bleak not installed. Run: pip install bleak"
+
+    device = await BleakScanner.find_device_by_name(LAMP_BLE_NAME, timeout=10)
+    if not device:
+        return None, f"BLE device '{LAMP_BLE_NAME}' not found. Is it in range?"
+
+    client = BleakClient(device)
+    await client.connect()
+    if not client.is_connected:
+        return None, "Failed to connect over BLE."
+    return client, None
+
+
+@mcp.tool()
+async def bt_set_color(red: float, green: float, blue: float) -> str:
+    """Set lamp color over Bluetooth (no WiFi needed).
+
+    Args:
+        red: Red value (0-255).
+        green: Green value (0-255).
+        blue: Blue value (0-255).
+    """
+    client, err = await _ble_connect()
+    if err:
+        return err
+    try:
+        r = max(0, min(255, int(red)))
+        g = max(0, min(255, int(green)))
+        b = max(0, min(255, int(blue)))
+        await client.write_gatt_char(BLE_RGB_UUID, bytes([r, g, b]))
+        return f"BT: Color set to RGB({r},{g},{b})"
+    finally:
+        await client.disconnect()
+
+
+@mcp.tool()
+async def bt_set_brightness(brightness: float) -> str:
+    """Set lamp brightness over Bluetooth (no WiFi needed).
+
+    Args:
+        brightness: Brightness percentage (0-100).
+    """
+    client, err = await _ble_connect()
+    if err:
+        return err
+    try:
+        val = max(0, min(255, int(brightness * 255 / 100)))
+        await client.write_gatt_char(BLE_BRI_UUID, bytes([val]))
+        return f"BT: Brightness set to {brightness}%"
+    finally:
+        await client.disconnect()
+
+
+@mcp.tool()
+async def bt_set_effect(effect: str) -> str:
+    """Activate a firmware effect over Bluetooth (no WiFi needed).
+
+    Args:
+        effect: Effect name (Rainbow, Candle, Police, Ocean, Lava, Northern Lights, etc.) or 'off'/'none'.
+    """
+    client, err = await _ble_connect()
+    if err:
+        return err
+    try:
+        await client.write_gatt_char(BLE_EFX_UUID, effect.encode("utf-8"))
+        return f"BT: Effect set to '{effect}'"
+    finally:
+        await client.disconnect()
+
+
+@mcp.tool()
+async def bt_power(on: bool = True) -> str:
+    """Turn lamp on/off over Bluetooth (no WiFi needed).
+
+    Args:
+        on: True to turn on, False to turn off.
+    """
+    client, err = await _ble_connect()
+    if err:
+        return err
+    try:
+        await client.write_gatt_char(BLE_PWR_UUID, bytes([1 if on else 0]))
+        return f"BT: Power {'ON' if on else 'OFF'}"
+    finally:
+        await client.disconnect()
+
+
+@mcp.tool()
+async def bt_set_white(color_temp: float = 370) -> str:
+    """Set white color temperature over Bluetooth (no WiFi needed).
+
+    Args:
+        color_temp: Color temperature in mireds (153=cool, 588=warm).
+    """
+    client, err = await _ble_connect()
+    if err:
+        return err
+    try:
+        ct = max(153, min(588, int(color_temp)))
+        low = ct & 0xFF
+        high = (ct >> 8) & 0xFF
+        await client.write_gatt_char(BLE_CT_UUID, bytes([low, high]))
+        return f"BT: Color temp set to {ct} mireds"
+    finally:
+        await client.disconnect()
+
+
+# --- Log Streaming ---
+
+
+@mcp.tool()
+async def get_logs(duration: float = 5.0) -> str:
+    """Stream ESPHome logs from the lamp for a duration.
+
+    Args:
+        duration: Seconds to collect logs (default 5.0).
+    """
+    if err := await _ensure_connected():
+        return err
+
+    log_lines: list[str] = []
+
+    def _log_callback(msg):
+        text = getattr(msg, "message", str(msg))
+        log_lines.append(text)
+
+    cb = lamp.client.subscribe_logs(
+        _log_callback,
+        log_level=aioesphomeapi.LogLevel.LOG_LEVEL_DEBUG,
+    )
+    if cb is not None:
+        await cb
+
+    await asyncio.sleep(duration)
+
+    # Unsubscribe by reconnecting (no unsub API)
+    # Just return what we collected
+    if not log_lines:
+        return f"No logs collected in {duration}s."
+
+    return f"Collected {len(log_lines)} log lines:\n" + "\n".join(log_lines[-100:])
+
+
+def _find_serial_port() -> str | None:
+    """Auto-detect the USB serial port."""
+    import glob
+    for pattern in ["/dev/ttyUSB*", "/dev/ttyACM*"]:
+        ports = sorted(glob.glob(pattern))
+        if ports:
+            return ports[0]
+    return None
+
+
+@mcp.tool()
+async def get_serial_logs(port: str = "", duration: float = 5.0, baud: int = 115200) -> str:
+    """Read serial/UART logs from the lamp's debug port. Auto-detects the port.
+
+    Args:
+        port: Serial port (auto-detected if empty).
+        duration: Seconds to read (default 5.0).
+        baud: Baud rate (default 115200).
+    """
+    import subprocess
+    if not port:
+        port = _find_serial_port()
+        if not port:
+            return "No USB serial port found. Is the adapter plugged in?"
+
+    try:
+        # Set baud rate first
+        subprocess.run(
+            ["stty", "-F", port, str(baud), "cs8", "-cstopb", "-parenb", "raw"],
+            capture_output=True, timeout=3,
+        )
+        result = subprocess.run(
+            ["timeout", str(duration), "cat", port],
+            capture_output=True, text=True, timeout=duration + 2,
+        )
+        output = result.stdout.strip()
+        if not output:
+            return f"No serial output on {port} in {duration}s."
+        lines = output.split("\n")
+        return f"Serial logs from {port} ({len(lines)} lines):\n" + "\n".join(lines[-100:])
+    except FileNotFoundError:
+        return f"Serial port {port} not found."
+    except subprocess.TimeoutExpired:
+        return "Serial read timed out."
+    except PermissionError:
+        return f"Permission denied on {port}. Try: sudo chmod 666 {port}"
+    except Exception as e:
+        return f"Serial error: {e}"
 
 
 if __name__ == "__main__":
