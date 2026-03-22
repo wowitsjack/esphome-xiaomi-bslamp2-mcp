@@ -17,7 +17,7 @@ wifi:
   password: !secret wifi_password
   ap:
     ssid: "Bedside Lamp AP"
-    password: !secret ap_password
+    password: !secret wifi_password
 
 captive_portal:
 
@@ -61,6 +61,7 @@ esp32_ble_server:
                     float g = x[1] / 255.0f;
                     float b = x[2] / 255.0f;
                     auto call = id(my_light).turn_on();
+                    call.set_effect("None");
                     call.set_rgb(r, g, b);
                     call.set_transition_length(500);
                     call.perform();
@@ -81,6 +82,7 @@ esp32_ble_server:
                   if (x.size() >= 1) {
                     float bri = x[0] / 255.0f;
                     auto call = id(my_light).turn_on();
+                    call.set_effect("None");
                     call.set_brightness(bri);
                     call.set_transition_length(500);
                     call.perform();
@@ -130,11 +132,13 @@ esp32_ble_server:
                   if (x.size() >= 1) {
                     if (x[0] == 0) {
                       auto call = id(my_light).turn_off();
+                      call.set_effect("None");
                       call.set_transition_length(500);
                       call.perform();
                       ESP_LOGI("BLE", "Power OFF");
                     } else {
                       auto call = id(my_light).turn_on();
+                      call.set_effect("None");
                       call.set_transition_length(500);
                       call.perform();
                       ESP_LOGI("BLE", "Power ON");
@@ -157,6 +161,7 @@ esp32_ble_server:
                     if (mireds < 153) mireds = 153;
                     if (mireds > 588) mireds = 588;
                     auto call = id(my_light).turn_on();
+                    call.set_effect("None");
                     call.set_color_temperature(mireds);
                     call.set_transition_length(500);
                     call.perform();
@@ -172,7 +177,7 @@ api:
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    password: !secret wifi_password
 
 logger:
   level: INFO
