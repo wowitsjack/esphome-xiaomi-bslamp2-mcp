@@ -1,0 +1,450 @@
+substitutions:
+  name: bedside-lamp
+  friendly_name: Bedside Lamp
+
+packages:
+  bslamp2:
+    url: https://github.com/mmakaay/esphome-xiaomi_bslamp2
+    ref: dev
+    files:
+      - packages/core.yaml
+      - packages/behavior_default.yaml
+      - packages/ota_feedback.yaml
+    refresh: 0s
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Bedside Lamp AP"
+    password: !secret ap_password
+
+captive_portal:
+
+esp32_improv:
+  authorizer: none
+
+web_server:
+  port: 80
+  version: 3
+
+api:
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+logger:
+  level: INFO
+  baud_rate: 115200
+
+# Speed control: 1.0 = normal, 0.5 = half speed, 2.0 = double
+number:
+  - platform: template
+    id: effect_speed
+    name: Effect Speed
+    min_value: 0.1
+    max_value: 5.0
+    step: 0.1
+    initial_value: 1.0
+    optimistic: true
+    restore_value: true
+
+# Extend the light with buttery smooth effects using direct PWM output
+light:
+  - platform: xiaomi_bslamp2
+    id: !extend my_light
+    default_transition_length: 500ms
+    effects:
+      # --- Rainbow: direct PWM, zero pipeline overhead ---
+      - lambda:
+          name: "Rainbow"
+          update_interval: 16ms
+          lambda: |-
+            static float hue = 0.0f;
+            float spd = id(effect_speed).state;
+            float bri = id(my_light).current_values.get_brightness();
+            hue += 0.001f * spd;
+            if (hue >= 1.0f) hue -= 1.0f;
+            float h = hue * 6.0f;
+            int i = (int)h;
+            float f = h - i;
+            float q = 1.0f - f;
+            float t = f;
+            float r, g, b;
+            switch (i % 6) {
+              case 0: r=1; g=t; b=0; break;
+              case 1: r=q; g=1; b=0; break;
+              case 2: r=0; g=1; b=t; break;
+              case 3: r=0; g=q; b=1; break;
+              case 4: r=t; g=0; b=1; break;
+              default: r=1; g=0; b=q; break;
+            }
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            id(output_red).set_level(r * bri);
+            id(output_green).set_level(g * bri);
+            id(output_blue).set_level(b * bri);
+            id(output_white).set_level(0);
+
+      # --- Rainbow Slow: dreamy pace ---
+      - lambda:
+          name: "Rainbow Slow"
+          update_interval: 16ms
+          lambda: |-
+            static float hue = 0.0f;
+            float spd = id(effect_speed).state;
+            float bri = id(my_light).current_values.get_brightness();
+            hue += 0.0005f * spd;
+            if (hue >= 1.0f) hue -= 1.0f;
+            float h = hue * 6.0f;
+            int i = (int)h;
+            float f = h - i;
+            float q = 1.0f - f;
+            float t = f;
+            float r, g, b;
+            switch (i % 6) {
+              case 0: r=1; g=t; b=0; break;
+              case 1: r=q; g=1; b=0; break;
+              case 2: r=0; g=1; b=t; break;
+              case 3: r=0; g=q; b=1; break;
+              case 4: r=t; g=0; b=1; break;
+              default: r=1; g=0; b=q; break;
+            }
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            id(output_red).set_level(r * bri);
+            id(output_green).set_level(g * bri);
+            id(output_blue).set_level(b * bri);
+            id(output_white).set_level(0);
+
+      # --- Breathe: smooth sine-wave brightness pulse ---
+      - lambda:
+          name: "Breathe"
+          update_interval: 16ms
+          lambda: |-
+            static float phase = 0.0f;
+            float spd = id(effect_speed).state;
+            phase += 0.015f * spd;
+            if (phase >= 6.2832f) phase -= 6.2832f;
+            float maxbri = id(my_light).current_values.get_brightness();
+            float bri = (sinf(phase) + 1.0f) / 2.0f;
+            bri = (0.02f + bri * 0.98f) * maxbri;
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            id(output_white).set_level(bri);
+            id(output_red).set_level(0);
+            id(output_green).set_level(0);
+            id(output_blue).set_level(0);
+
+      # --- Candle: realistic warm flicker ---
+      - lambda:
+          name: "Candle"
+          update_interval: 16ms
+          lambda: |-
+            static float target = 0.6f;
+            static float current = 0.6f;
+            static float tg = 0.4f;
+            static float cg = 0.4f;
+            static int hold = 0;
+            if (hold <= 0) {
+              target = 0.25f + ((float)(rand() % 100)) / 100.0f * 0.75f;
+              tg = 0.3f + ((float)(rand() % 25)) / 100.0f;
+              hold = 1 + rand() % 12;
+            }
+            hold--;
+            current += (target - current) * 0.08f;
+            cg += (tg - cg) * 0.08f;
+            float bri = id(my_light).current_values.get_brightness();
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            id(output_red).set_level(current * bri);
+            id(output_green).set_level(current * cg * bri);
+            id(output_blue).set_level(current * 0.03f * bri);
+            id(output_white).set_level(0);
+
+      # --- Strobe: hard on/off ---
+      - lambda:
+          name: "Strobe"
+          update_interval: 125ms
+          lambda: |-
+            static bool on = false;
+            on = !on;
+            float bri = id(my_light).current_values.get_brightness();
+            float v = on ? bri : 0.0f;
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            id(output_red).set_level(v);
+            id(output_green).set_level(v);
+            id(output_blue).set_level(v);
+            id(output_white).set_level(v);
+
+      # --- Party: saturated random colors ---
+      - lambda:
+          name: "Party"
+          update_interval: 200ms
+          lambda: |-
+            static float cr = 1, cg = 0, cb = 0;
+            static float tr = 0, tg = 1, tb = 0;
+            static int steps_left = 0;
+            if (steps_left <= 0) {
+              // Pick new random hue
+              float hue = ((float)(rand() % 100)) / 100.0f;
+              float h = hue * 6.0f;
+              int i = (int)h;
+              float f = h - i;
+              switch (i % 6) {
+                case 0: tr=1; tg=f; tb=0; break;
+                case 1: tr=1-f; tg=1; tb=0; break;
+                case 2: tr=0; tg=1; tb=f; break;
+                case 3: tr=0; tg=1-f; tb=1; break;
+                case 4: tr=f; tg=0; tb=1; break;
+                default: tr=1; tg=0; tb=1-f; break;
+              }
+              steps_left = 3 + rand() % 4;
+            }
+            steps_left--;
+            cr += (tr - cr) * 0.4f;
+            cg += (tg - cg) * 0.4f;
+            cb += (tb - cb) * 0.4f;
+            float bri = id(my_light).current_values.get_brightness();
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            id(output_red).set_level(cr * bri);
+            id(output_green).set_level(cg * bri);
+            id(output_blue).set_level(cb * bri);
+            id(output_white).set_level(0);
+
+      # --- Police: red/blue ---
+      - lambda:
+          name: "Police"
+          update_interval: 100ms
+          lambda: |-
+            static int tick = 0;
+            tick++;
+            bool red_phase = (tick % 8) < 4;
+            bool flash_on = (tick % 4) < 3;
+            float bri = id(my_light).current_values.get_brightness();
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            if (flash_on) {
+              id(output_red).set_level(red_phase ? bri : 0.0f);
+              id(output_green).set_level(0);
+              id(output_blue).set_level(red_phase ? 0.0f : bri);
+            } else {
+              id(output_red).set_level(0);
+              id(output_green).set_level(0);
+              id(output_blue).set_level(0);
+            }
+            id(output_white).set_level(0);
+
+      # --- Lightning: flashes on dark blue ---
+      - lambda:
+          name: "Lightning"
+          update_interval: 50ms
+          lambda: |-
+            static int cooldown = 60;
+            static int flash_left = 0;
+            static bool flash_on = false;
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            if (flash_left > 0) {
+              flash_left--;
+              flash_on = !flash_on;
+              if (flash_on) {
+                id(output_red).set_level(1);
+                id(output_green).set_level(1);
+                id(output_blue).set_level(1);
+                id(output_white).set_level(1);
+              } else {
+                id(output_red).set_level(0.02f);
+                id(output_green).set_level(0.02f);
+                id(output_blue).set_level(0.12f);
+                id(output_white).set_level(0);
+              }
+            } else {
+              cooldown--;
+              if (cooldown <= 0) {
+                flash_left = 2 + rand() % 5;
+                cooldown = 40 + rand() % 120;
+              }
+              id(output_red).set_level(0.02f);
+              id(output_green).set_level(0.02f);
+              id(output_blue).set_level(0.12f);
+              id(output_white).set_level(0);
+            }
+
+      # --- Romantic: slow pinks and purples ---
+      - lambda:
+          name: "Romantic"
+          update_interval: 16ms
+          lambda: |-
+            static float phase = 0.0f;
+            float spd = id(effect_speed).state;
+            phase += 0.001f * spd;
+            if (phase >= 6.2832f) phase -= 6.2832f;
+            float t = (sinf(phase) + 1.0f) / 2.0f;
+            float bri = id(my_light).current_values.get_brightness();
+            float r = (0.4f + t * 0.3f) * bri;
+            float g = t * 0.08f * bri;
+            float b = (0.15f + (1.0f - t) * 0.4f) * bri;
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            id(output_red).set_level(r);
+            id(output_green).set_level(g);
+            id(output_blue).set_level(b);
+            id(output_white).set_level(0);
+
+      # --- Sunrise: 5 min warm-up ---
+      - lambda:
+          name: "Sunrise"
+          update_interval: 500ms
+          lambda: |-
+            static int step = 0;
+            const int total = 600;
+            if (step >= total) return;
+            float p = (float)step / (float)total;
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            if (p < 0.3f) {
+              float t = p / 0.3f;
+              id(output_red).set_level(t * 0.15f);
+              id(output_green).set_level(0);
+              id(output_blue).set_level(0);
+              id(output_white).set_level(0);
+            } else if (p < 0.6f) {
+              float t = (p - 0.3f) / 0.3f;
+              id(output_red).set_level(0.15f + t * 0.25f);
+              id(output_green).set_level(t * 0.1f);
+              id(output_blue).set_level(0);
+              id(output_white).set_level(t * 0.2f);
+            } else {
+              float t = (p - 0.6f) / 0.4f;
+              id(output_red).set_level(0.4f - t * 0.3f);
+              id(output_green).set_level(0.1f - t * 0.08f);
+              id(output_blue).set_level(0);
+              id(output_white).set_level(0.2f + t * 0.8f);
+            }
+            step++;
+
+      # --- Sunset: 5 min cool-down to off ---
+      - lambda:
+          name: "Sunset"
+          update_interval: 500ms
+          lambda: |-
+            static int step = 0;
+            const int total = 600;
+            if (step >= total) {
+              id(output_master1).turn_off();
+              id(output_master2).turn_off();
+              return;
+            }
+            float p = (float)step / (float)total;
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            float bri = 1.0f - p;
+            id(output_red).set_level(bri * (0.3f + p * 0.7f));
+            id(output_green).set_level(bri * (0.1f * (1.0f - p)));
+            id(output_blue).set_level(0);
+            id(output_white).set_level(bri * (1.0f - p));
+            step++;
+
+      # --- Alert: red pulses ---
+      - lambda:
+          name: "Alert"
+          update_interval: 100ms
+          lambda: |-
+            static int tick = 0;
+            tick++;
+            bool on = (tick % 6) < 3;
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            float bri = id(my_light).current_values.get_brightness();
+            id(output_red).set_level(on ? bri : 0.02f * bri);
+            id(output_green).set_level(0);
+            id(output_blue).set_level(0);
+            id(output_white).set_level(0);
+
+      # --- Ocean: calming blue-green waves ---
+      - lambda:
+          name: "Ocean"
+          update_interval: 16ms
+          lambda: |-
+            static float p1 = 0.0f;
+            static float p2 = 2.1f;
+            float spd = id(effect_speed).state;
+            p1 += 0.012f * spd;
+            p2 += 0.019f * spd;
+            if (p1 >= 6.2832f) p1 -= 6.2832f;
+            if (p2 >= 6.2832f) p2 -= 6.2832f;
+            float w1 = (sinf(p1) + 1.0f) / 2.0f;
+            float w2 = (sinf(p2) + 1.0f) / 2.0f;
+            float bri = id(my_light).current_values.get_brightness();
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            id(output_red).set_level(0);
+            id(output_green).set_level((0.1f + w1 * 0.25f) * bri);
+            id(output_blue).set_level((0.2f + w2 * 0.4f) * bri);
+            id(output_white).set_level(0);
+
+      # --- Lava: slow red/orange morph ---
+      - lambda:
+          name: "Lava"
+          update_interval: 16ms
+          lambda: |-
+            static float p1 = 0.0f;
+            static float p2 = 1.5f;
+            static float p3 = 3.7f;
+            float spd = id(effect_speed).state;
+            p1 += 0.006f * spd; p2 += 0.009f * spd; p3 += 0.004f * spd;
+            if (p1 >= 6.2832f) p1 -= 6.2832f;
+            if (p2 >= 6.2832f) p2 -= 6.2832f;
+            if (p3 >= 6.2832f) p3 -= 6.2832f;
+            float bri = id(my_light).current_values.get_brightness();
+            float r = (0.5f + sinf(p1) * 0.3f) * bri;
+            float g = (0.1f + sinf(p2) * 0.1f) * bri;
+            float b = sinf(p3) * 0.03f * bri;
+            if (b < 0) b = 0;
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            id(output_red).set_level(r);
+            id(output_green).set_level(g);
+            id(output_blue).set_level(b);
+            id(output_white).set_level(0);
+
+      # --- Northern Lights: aurora borealis ---
+      - lambda:
+          name: "Northern Lights"
+          update_interval: 16ms
+          lambda: |-
+            static float p1 = 0.0f;
+            static float p2 = 2.0f;
+            static float p3 = 4.0f;
+            float spd = id(effect_speed).state;
+            p1 += 0.004f * spd; p2 += 0.006f * spd; p3 += 0.002f * spd;
+            if (p1 >= 6.2832f) p1 -= 6.2832f;
+            if (p2 >= 6.2832f) p2 -= 6.2832f;
+            if (p3 >= 6.2832f) p3 -= 6.2832f;
+            float w1 = (sinf(p1) + 1.0f) / 2.0f;
+            float w2 = (sinf(p2) + 1.0f) / 2.0f;
+            float w3 = (sinf(p3) + 1.0f) / 2.0f;
+            float bri = id(my_light).current_values.get_brightness();
+            id(output_master1).turn_on();
+            id(output_master2).turn_on();
+            id(output_red).set_level(w3 * 0.2f * bri);
+            id(output_green).set_level((0.15f + w1 * 0.4f) * bri);
+            id(output_blue).set_level((0.1f + w2 * 0.35f) * bri);
+            id(output_white).set_level(0);
+
+sensor:
+  - platform: wifi_signal
+    name: WiFi Signal
+    update_interval: 60s
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: IP Address
+    ssid:
+      name: Connected SSID
